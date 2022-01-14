@@ -1,0 +1,374 @@
+'#Language "WWB-COM"
+'#include "vba_globals_all.lib"
+
+Option Explicit
+
+Sub Main
+
+Units.Geometry "mil"
+Units.Time "ps"
+Units.Frequency "GHz"
+	
+	'PCB Parameters
+	Dim sFilePath As String
+	Dim sFileContents As String
+	Dim sFileLines() As String
+
+	Dim CrntLyrData() As String 	'Current layer data'
+	Dim LyrDie As Double 			'Current layer dielectric constant'
+
+	Dim CrntLyrThkns As Double 		'Current layer thickness'
+	Dim CrntTotThkns As Double		'Current total thickness'
+
+	Dim PrevLyrName As String		'Previous layer name
+	Dim PrevLyrMtrl As String		'Previous dielectric material name
+	Dim PrevLyrThkns As Double		'Previous layer thickness
+	
+	Dim MaxLyrIndex As Integer
+	Dim M_Layers As Integer
+	Dim D_Layers As Integer
+
+	Dim PCB_Len_TLine As Double
+
+	Dim Gulch_Width As Double
+
+	Dim TLine_Width As Double
+	Dim TLine_GND_Dist As Double
+
+	Dim i As Integer				'Temporary index for interating the PCB layers
+	
+	'Via Parameters
+	Dim via_rad As Double
+	Dim via_lip As Double
+	
+	Dim x_start As Double
+	Dim y_start As Double
+
+	Dim x_loc As Double
+	Dim y_loc As Double
+
+	Dim x_lim As Double
+	Dim y_lim As Double
+
+	Dim di As Integer
+	Dim N As Integer
+
+	
+	BeginHide
+		'Ask for PCB stack up file location (Just once since it's "hidden")
+		sFilePath = GetFilePath("*.txt", "*.txt", "", "Please select PCB stack-up file in txt format", 0)
+		Assign("sFilePath")
+	
+		StoreDoubleParameter "PCB_Width", 500
+		SetParameterDescription  ( "PCB_Width",  "PCB Width"  )
+		
+		StoreDoubleParameter "PCB_Len_TLine", 500
+		SetParameterDescription  ( "PCB_Len_TLine",  "Transmission Line Length"  )
+
+		StoreDoubleParameter "TLine_Width", 7
+		SetParameterDescription  ( "TLine_Width",  "Transmission Line Width"  )
+		
+		StoreDoubleParameter "TLine_GND_Dist", 10
+		SetParameterDescription  ( "TLine_GND_Dist",  "Transmission Line to Side GND Distance"  )
+
+		StoreDoubleParameter "via_space", 55
+		SetParameterDescription  ( "via_space",  "Spacing between ground vias"  )
+
+	EndHide
+
+	'Load in data file
+	sFileContents = TextFileToString_LIB(sFilePath)
+	sFileLines = Split(sFileContents, vbNewLine)
+	
+	MaxLyrIndex = UBound(sFileLines)
+	M_Layers = 0
+	D_Layers = 0
+
+	Gulch_Width = CDbl("TLine_Width") + 2*CDbl("TLine_GND_Dist")
+
+	CrntTotThkns = 0
+	
+	PrevLyrMtrl = "Ass"
+	
+	'Build PCB model
+	Component.New "PCB"
+	For i = 0 To MaxLyrIndex STEP 1
+		CrntLyrData = Split(sFileLines(i), ",")
+		CrntLyrThkns = CDbl(CrntLyrData(1))
+		LyrDie = CDbl(CrntLyrData(3))
+		
+		If LyrDie = 0 Then
+			'Dielectric constant of layer is 0 so draw metal layer
+			With Brick
+				.Reset
+				.Name (CrntLyrData(0))
+				.Component ("PCB")
+				.Material ("PEC")
+				.Xrange (-0.5*CDbl("PCB_Width"), 0.5*CDbl("PCB_Width"))
+				.Yrange (-0.5*CDbl("PCB_Len_TLine"), 0.5*CDbl("PCB_Len_TLine"))
+				.Zrange (-1*CrntTotThkns, -1*(CrntLyrThkns + CrntTotThkns))
+				.Create
+			End With					
+			
+			'Check if this metal layer has gulch
+			If CInt(CrntLyrData(4)) = 1 Then
+				'This layer requires a gulch or metal clearance 
+				'for a transmission line(may or may not be there) 
+				With Brick
+					.Reset
+					.Name ("gulch_temp")
+					.Component ("PCB")
+					.Material ("PEC")
+					.Xrange (-0.5*Gulch_Width,0.5*Gulch_Width)
+					.Yrange (-0.5*CDbl("PCB_Len_TLine"), 0.5*CDbl("PCB_Len_TLine"))
+					.Zrange (-1*CrntTotThkns, -1*(CrntLyrThkns + CrntTotThkns))
+					.Create
+				End With
+				'Subtract the gulch from the metal plane
+				Solid.Subtract "PCB:"&CrntLyrData(0), "PCB:gulch_temp"
+				
+				'Check if this metal layer has transmission line
+				If CInt(CrntLyrData(5)) = 1 Then
+					'Draw transmission line
+					With Brick
+						.Reset
+						.Name ("transmission_line")
+						.Component ("PCB")
+						.Material ("PEC")
+						.Xrange (-0.5*CDbl("TLine_Width"),0.5*CDbl("TLine_Width"))
+						.Yrange (-0.5*CDbl("PCB_Len_TLine"), 0.5*CDbl("PCB_Len_TLine"))
+						.Zrange (-1*CrntTotThkns, -1*(CrntLyrThkns + CrntTotThkns))
+						.Create
+					End With
+					'Add the transmission line to the metal plane
+					Solid.Add "PCB:"&CrntLyrData(0), "PCB:transmission_line"					
+				End If
+			End If
+			'Check if previous layer is a PrePreg layer and the current metal layer is not the last layer
+			If ((i < MaxLyrIndex) And (Left(PrevLyrMtrl,2) = "PP")) Then
+				With Brick
+					.Reset
+					.Name ("D_temp")
+					.Component ("PCB")
+					.Material (PrevLyrMtrl)
+					.Xrange (-0.5*CDbl("PCB_Width"),0.5*CDbl("PCB_Width"))
+					.Yrange (-0.5*CDbl("PCB_Len_TLine"), 0.5*CDbl("PCB_Len_TLine"))
+					.Zrange (-1*CrntTotThkns, -1*(CrntLyrThkns + CrntTotThkns))
+					.Create
+				End With
+				'Add new dielectric brick to the previous PrePreg brick 
+				Solid.Add "PCB:"&PrevLyrName, "PCB:D_temp"
+				'Insert the current metal layer into the previous PrePreg layer
+				Solid.Insert "PCB:"&PrevLyrName, "PCB:"&CrntLyrData(0)
+			End If
+			'Advance metal layer count
+			M_Layers = M_Layers+1
+		
+		Else
+			'Dielectric constant of layer is not 0 
+			'Step 1: Create dielectric material
+			With Material
+				.Reset
+				.Name (CrntLyrData(2))
+				.Type "Normal"
+				.Epsilon (LyrDie)
+				.Create
+			End With
+			'Step 2: Draw dielectric layer
+			With Brick
+				.Reset
+				.Name (CrntLyrData(0))
+				.Component ("PCB")
+				.Material (CrntLyrData(2))
+				.Xrange (-0.5*CDbl("PCB_Width"),0.5*CDbl("PCB_Width"))
+				.Yrange (-0.5*CDbl("PCB_Len_TLine"), 0.5*CDbl("PCB_Len_TLine"))
+				.Zrange (-1*CrntTotThkns, -1*(CrntLyrThkns + CrntTotThkns))
+				.Create
+			End With
+			
+			'Step 3: Check if current layer is a PrePreg layer and the previous metal layer is not the 1st layer
+			If ((i > 1) And (Left(CrntLyrData(2),2) = "PP")) Then
+				'Create a dielectric brick of same thickness as previous layer (most likely metal)
+				With Brick
+					.Reset
+					.Name ("D_temp")
+					.Component ("PCB")
+					.Material (CrntLyrData(2))
+					.Xrange (-0.5*CDbl("PCB_Width"),0.5*CDbl("PCB_Width"))
+					.Yrange (-0.5*CDbl("PCB_Len_TLine"), 0.5*CDbl("PCB_Len_TLine"))
+					.Zrange (-1*CrntTotThkns, -1*(CrntTotThkns - PrevLyrThkns))
+					.Create
+				End With
+				'Combine the new brick to the old brick
+				Solid.Add "PCB:"&CrntLyrData(0), "PCB:D_temp"
+				'Insert the new brick into the previous layer (again, most likely a metal layer)
+				Solid.Insert "PCB:"&CrntLyrData(0), "PCB:"&PrevLyrName				
+			End If			
+			'Advance dielectric layer count
+			D_Layers = D_Layers+1
+		End If
+		
+		'Compute the current total thickness
+		CrntTotThkns = CrntTotThkns + CrntLyrThkns
+		
+	PrevLyrName = CrntLyrData(0)
+	PrevLyrMtrl = CrntLyrData(2)
+	PrevLyrThkns = CrntLyrThkns
+	Next i
+
+	BeginHide
+	MsgBox "PCB Stack Up Info:" & vbCr & _
+			"Metal Layers" & vbTab & M_Layers & vbCr & _
+			"Dielectric Layers" & vbTab & D_Layers & vbCr & _
+			"Total Thickness" & vbTab & CrntTotThkns & "mils"
+	EndHide
+
+	
+
+	'Build and place vias
+	'Assume 5 mil via diameter and 5 mil via lip
+	via_rad = 2.5
+	via_lip = 5
+	x_start = 0.5*Gulch_Width + via_lip + via_rad
+	y_start = -0.5*CDbl("via_space")
+	
+	'5 mil buffer along the PCB edges
+	x_lim = 0.5*CDbl("PCB_Width") - 5
+	y_lim = 0.5*CDbl("PCB_Len_TLine") - 5
+	
+
+	'Place vias in the right lower quadrant
+	N = 0
+	x_loc = x_start
+	y_loc = y_start
+
+	Component.New "Via_1R"
+	While x_loc < x_lim
+		While y_loc > -1*y_lim
+			With Cylinder
+				.Reset
+				.Name ("v"&CStr(N))
+				.Component ("Via_1R")
+				.Material ("PEC")
+				.Axis ("z")
+				.Outerradius (via_rad)
+				.Innerradius (0)
+				.Xcenter (x_loc)
+				.Ycenter (y_loc)
+				.Zcenter (0)
+				.Zrange (0, -1*CrntTotThkns)
+				.Segments (0)
+				.Create
+			End With
+			For di = 1 To D_Layers STEP 1
+				Solid.Insert "PCB:D"&CStr(di), "Via_1R:v"&CStr(N)
+			Next di
+			N = N + 1
+			y_loc = y_loc - CDbl("via_space")
+		Wend
+		y_loc = y_start
+		x_loc = x_loc + CDbl("via_space")
+	Wend
+
+	'Place vias in the left lower quadrant
+	N = 0
+	x_loc = -1*x_start
+	y_loc = y_start
+
+	Component.New "Via_1L"
+	While x_loc > -1*x_lim
+		While y_loc > -1*y_lim
+			With Cylinder
+				.Reset
+				.Name ("v"&CStr(N))
+				.Component ("Via_1L")
+				.Material ("PEC")
+				.Axis ("z")
+				.Outerradius (via_rad)
+				.Innerradius (0)
+				.Xcenter (x_loc)
+				.Ycenter (y_loc)
+				.Zcenter (0)
+				.Zrange (0, -1*CrntTotThkns)
+				.Segments (0)
+				.Create
+			End With
+			For di = 1 To D_Layers STEP 1
+				Solid.Insert "PCB:D"&CStr(di), "Via_1L:v"&CStr(N)
+			Next di
+			N = N + 1
+			y_loc = y_loc - CDbl("via_space")
+		Wend
+		y_loc = y_start
+		x_loc = x_loc - CDbl("via_space")
+	Wend
+
+	'Place vias in the right upper quadrant
+	N = 0
+	x_loc = x_start
+	y_loc = -1*y_start 
+
+	Component.New "Via_2R"
+	While x_loc < x_lim
+		While y_loc < y_lim		
+			With Cylinder
+			    .Reset
+			    .Name ("v"&CStr(N))
+			    .Component ("Via_2R")
+			    .Material ("PEC")
+			    .Axis ("z")
+			    .Outerradius (via_rad)
+				.Innerradius (0)
+				.Xcenter (x_loc)
+				.Ycenter (y_loc)
+				.Zcenter (0)
+				.Zrange (0, -1*CrntTotThkns)
+			    .Segments (0)
+			    .Create
+			End With
+			For di = 1 To D_Layers STEP 1
+				Solid.Insert "PCB:D"&CStr(di), "Via_2R:v"&CStr(N)
+			Next di
+			N = N + 1		
+			y_loc = y_loc + CDbl("via_space")
+		Wend
+		x_loc = x_loc + CDbl("via_space")
+		y_loc = y_start + CDbl("via_space")
+	Wend
+
+	'Place vias in the left upper quadrant
+	N = 0
+	x_loc = -1*x_start
+	y_loc = -1*y_start 
+
+	Component.New "Via_2L"
+	While x_loc > -1*x_lim
+		While y_loc < y_lim		
+			With Cylinder
+				.Reset
+			    .Name ("v"&CStr(N))
+			    .Component ("Via_2L")
+			    .Material ("PEC")
+			    .Axis ("z")
+			    .Outerradius (via_rad)
+				.Innerradius (0)
+				.Xcenter (x_loc)
+				.Ycenter (y_loc)
+				.Zcenter (0)
+				.Zrange (0, -1*CrntTotThkns)
+			    .Segments (0)
+			    .Create
+			End With
+			For di = 1 To D_Layers STEP 1
+				Solid.Insert "PCB:D"&CStr(di), "Via_2L:v"&CStr(N)
+			Next di
+			N = N + 1		
+			y_loc = y_loc + CDbl("via_space")
+		Wend
+		x_loc = x_loc - CDbl("via_space")
+		y_loc = y_start + CDbl("via_space")
+	Wend
+
+End Sub
+
+
