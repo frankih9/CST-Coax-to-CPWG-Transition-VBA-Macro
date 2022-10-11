@@ -14,7 +14,8 @@ The descriptions of the 6 parameters of each line are listed below:
 5. Place clearance - If 1, a clearance is created.  Width of clearance is defined by the "TLine_GND_Dist" and "Tline_Width" variables.
 6. Place transmission line - If 1, a transmission line is placed.  
 
-![alt text](Coplanar WG on Multilayer PCB Study V1.jpg)    
+Here is the result of *Coplanar WG on Multilayer PCB Study V1.mcs* with  *6_layer_PCB_stack_info.txt* 
+<img src="Coplanar WG on Multilayer PCB Study V1.jpg" alt="alt text" >
 
 ## Differences between V1 and V2
 If a transmission line is in one of the middle layers, the clearance will be filled with resin of the prepreg.  Script files ending with V2 model this resin fill with dielectric constant of the prepreg.  V1 scripts ignore the resin fill.  Which is more correct?
